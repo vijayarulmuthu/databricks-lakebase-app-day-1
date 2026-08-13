@@ -9,6 +9,7 @@ Run locally:
 Deploy as a Databricks App using app.yaml.
 """
 
+import json as _json
 import logging
 import os
 import re
@@ -28,6 +29,11 @@ _w = WorkspaceClient()
 
 TABLE_NAME = os.environ.get("MASSIVE_TABLE_NAME", "massive_records")
 WATCHLIST_TABLE_NAME = os.environ.get("WATCHLIST_TABLE_NAME", "watchlist")
+# Per-symbol cache of company profile + price history, shared across all
+# users watching that symbol so profile/history are fetched from Massive at
+# most once per _DETAILS_MAX_AGE_HOURS rather than on every watchlist add.
+DETAILS_TABLE_NAME = os.environ.get("TICKER_DETAILS_TABLE_NAME", "ticker_details")
+_DETAILS_MAX_AGE_HOURS = int(os.environ.get("TICKER_DETAILS_MAX_AGE_HOURS", 24))
 
 # Basic stock ticker shape check: 1-10 uppercase letters, with an optional
 # ".X" or ".XX" share-class suffix (e.g. "BRK.B"). This rejects obviously
@@ -49,15 +55,43 @@ def ensure_table():
 
 
 def ensure_watchlist_table():
-    """Create the watchlist table in Lakebase if it doesn't exist yet."""
+    """Create the watchlist table in Lakebase if it doesn't exist yet, and
+    backfill newer OHLCV columns onto tables created before they existed."""
     lakebase.run_write(
         f"""
         CREATE TABLE IF NOT EXISTS {WATCHLIST_TABLE_NAME} (
             symbol TEXT NOT NULL,
             email TEXT NOT NULL,
             latest_price NUMERIC,
+            open_price NUMERIC,
+            high_price NUMERIC,
+            low_price NUMERIC,
+            volume NUMERIC,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (symbol, email)
+        )
+        """
+    )
+    lakebase.run_write(
+        f"""
+        ALTER TABLE {WATCHLIST_TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS open_price NUMERIC,
+            ADD COLUMN IF NOT EXISTS high_price NUMERIC,
+            ADD COLUMN IF NOT EXISTS low_price NUMERIC,
+            ADD COLUMN IF NOT EXISTS volume NUMERIC
+        """
+    )
+
+
+def ensure_ticker_details_table():
+    """Create the per-symbol company profile / price history cache table."""
+    lakebase.run_write(
+        f"""
+        CREATE TABLE IF NOT EXISTS {DETAILS_TABLE_NAME} (
+            symbol TEXT PRIMARY KEY,
+            profile JSONB,
+            price_history JSONB,
+            fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """
     )
@@ -138,12 +172,21 @@ def sync_from_massive():
 
 @app.route("/watchlist", methods=["GET"])
 def get_watchlist():
-    """Return the current user's watchlist symbols, with their last known price."""
+    """Return the current user's watchlist with OHLCV, plus each symbol's
+    cached company profile and price history (no Massive calls here - both
+    are populated/refreshed only when a symbol is added)."""
     ensure_watchlist_table()
+    ensure_ticker_details_table()
     email = _current_user_email()
     rows = lakebase.run_query(
-        f"SELECT symbol, email, latest_price, updated_at FROM {WATCHLIST_TABLE_NAME} "
-        f"WHERE email = %s ORDER BY symbol ASC",
+        f"""
+        SELECT w.symbol, w.email, w.latest_price, w.open_price, w.high_price,
+               w.low_price, w.volume, w.updated_at, d.profile, d.price_history
+        FROM {WATCHLIST_TABLE_NAME} w
+        LEFT JOIN {DETAILS_TABLE_NAME} d ON d.symbol = w.symbol
+        WHERE w.email = %s
+        ORDER BY w.symbol ASC
+        """,
         (email,),
     )
     return jsonify(rows)
@@ -152,9 +195,11 @@ def get_watchlist():
 @app.route("/watchlist", methods=["POST"])
 def add_to_watchlist():
     """
-    Fetch the latest price for a single stock symbol from Massive using
-    exactly ONE API call (see MassiveClient.get_latest_price), then add/
-    update that symbol on the watchlist in Lakebase.
+    Fetch the latest OHLCV bar for a single stock symbol from Massive using
+    exactly ONE API call (see MassiveClient.get_latest_price), refresh that
+    symbol's cached company profile / price history if stale (0-2 more
+    calls, shared across all users - see _get_or_refresh_ticker_details),
+    then add/update that symbol on the watchlist in Lakebase.
     """
     ensure_watchlist_table()
 
@@ -170,31 +215,103 @@ def add_to_watchlist():
 
     client = MassiveClient()
     try:
-        data = client.get_latest_price(symbol)  # <-- single API call, latest price only
+        data = client.get_latest_price(symbol)  # <-- single API call, full OHLCV bar
     except requests.HTTPError:
         # Massive returns a 404/4xx for tickers it doesn't recognize.
         return jsonify({"error": f"Unknown ticker symbol: {symbol}"}), 400
 
-    price = _extract_latest_price(data)
+    bar = _extract_ohlcv(data)
+    price = bar.get("close")
     if price is None:
         # No usable price in the response (e.g. delisted/invalid ticker
         # that still 200s with an empty result set) - don't add it.
         return jsonify({"error": f"No price data available for ticker: {symbol}"}), 400
 
     email = _current_user_email()
+    details = _get_or_refresh_ticker_details(client, symbol)
 
     lakebase.run_write(
         f"""
-        INSERT INTO {WATCHLIST_TABLE_NAME} (symbol, email, latest_price, updated_at)
-        VALUES (%s, %s, %s, now())
+        INSERT INTO {WATCHLIST_TABLE_NAME}
+            (symbol, email, latest_price, open_price, high_price, low_price, volume, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now())
         ON CONFLICT (symbol, email) DO UPDATE
             SET latest_price = EXCLUDED.latest_price,
+                open_price = EXCLUDED.open_price,
+                high_price = EXCLUDED.high_price,
+                low_price = EXCLUDED.low_price,
+                volume = EXCLUDED.volume,
                 updated_at = EXCLUDED.updated_at
         """,
-        (symbol, email, price),
+        (symbol, email, price, bar.get("open"), bar.get("high"), bar.get("low"), bar.get("volume")),
     )
 
-    return jsonify({"symbol": symbol, "email": email, "latest_price": price})
+    return jsonify(
+        {
+            "symbol": symbol,
+            "email": email,
+            "latest_price": price,
+            "open": bar.get("open"),
+            "high": bar.get("high"),
+            "low": bar.get("low"),
+            "volume": bar.get("volume"),
+            "profile": details.get("profile"),
+            "price_history": details.get("price_history"),
+        }
+    )
+
+
+def _get_or_refresh_ticker_details(client: MassiveClient, symbol: str) -> dict:
+    """
+    Return cached company profile + price history for a symbol, refreshing
+    from Massive only when there's no cached row yet or it's older than
+    _DETAILS_MAX_AGE_HOURS.
+
+    This cache is keyed by symbol only (not per-user), so it costs at most
+    two extra Massive API calls (profile + history) per symbol per refresh
+    window, no matter how many users add that symbol to their watchlist.
+    """
+    ensure_ticker_details_table()
+
+    cached = lakebase.run_query(
+        f"""
+        SELECT profile, price_history FROM {DETAILS_TABLE_NAME}
+        WHERE symbol = %s AND fetched_at > now() - (%s * INTERVAL '1 hour')
+        """,
+        (symbol, _DETAILS_MAX_AGE_HOURS),
+    )
+    if cached:
+        return cached[0]
+
+    profile = None
+    price_history = None
+    try:
+        profile = client.get_ticker_details(symbol)
+    except requests.HTTPError:
+        logger.warning("No ticker details available for %s", symbol)
+
+    try:
+        price_history = client.get_price_history(symbol)
+    except requests.HTTPError:
+        logger.warning("No price history available for %s", symbol)
+
+    lakebase.run_write(
+        f"""
+        INSERT INTO {DETAILS_TABLE_NAME} (symbol, profile, price_history, fetched_at)
+        VALUES (%s, %s, %s, now())
+        ON CONFLICT (symbol) DO UPDATE
+            SET profile = EXCLUDED.profile,
+                price_history = EXCLUDED.price_history,
+                fetched_at = EXCLUDED.fetched_at
+        """,
+        (
+            symbol,
+            _json.dumps(profile) if profile is not None else None,
+            _json.dumps(price_history) if price_history is not None else None,
+        ),
+    )
+
+    return {"profile": profile, "price_history": price_history}
 
 
 @app.route("/watchlist/<symbol>", methods=["DELETE"])
@@ -219,33 +336,45 @@ def delete_from_watchlist(symbol):
     return jsonify({"symbol": symbol, "email": email, "deleted": True})
 
 
-def _extract_latest_price(data: dict) -> float | None:
-    """Pull the trade price out of the Massive 'previous close' response shape.
+def _pick(d: dict, *keys):
+    """Return the first present key's value from d, or None."""
+    for key in keys:
+        if key in d:
+            return d[key]
+    return None
+
+
+def _extract_ohlcv(data: dict) -> dict:
+    """Pull a full OHLCV bar out of the Massive 'previous close' response shape.
 
     The /v2/aggs/ticker/{symbol}/prev endpoint returns "results" as a LIST
     containing a single aggregate bar (not a dict), e.g.:
         {"status": "OK", "resultsCount": 1, "results": [{"c": 148.845, ...}]}
-    Previously this code treated "results" as a dict, so isinstance(results, dict)
-    was always False for this endpoint's real shape and the price silently
-    resolved to None. Unwrap the list here, and check "status"/"resultsCount"
-    so invalid tickers (empty results) are detected instead of "succeeding"
-    with a null price.
+    Unwrap the list here, and check "status"/"resultsCount" so invalid
+    tickers (empty results) are detected instead of "succeeding" with a null
+    price. Returns {} if no usable bar is found, otherwise a dict with
+    open/high/low/close/volume/timestamp keys (any of which may be None).
 
-    Adjust the key lookup here if the real Massive API returns a different
-    field name for the traded/close price.
+    Adjust the key lookups here if the real Massive API returns different
+    field names for these values.
     """
     if not isinstance(data, dict):
-        return None
+        return {}
     if data.get("status") not in (None, "OK") or data.get("resultsCount") == 0:
-        return None
+        return {}
     results = data.get("results", data)
     if isinstance(results, list):
         results = results[0] if results else None
-    if isinstance(results, dict):
-        for key in ("c", "p", "price", "last_price", "vw"):
-            if key in results:
-                return results[key]
-    return None
+    if not isinstance(results, dict):
+        return {}
+    return {
+        "open": _pick(results, "o", "open"),
+        "high": _pick(results, "h", "high"),
+        "low": _pick(results, "l", "low"),
+        "close": _pick(results, "c", "p", "price", "last_price", "vw"),
+        "volume": _pick(results, "v", "volume"),
+        "timestamp": _pick(results, "t", "timestamp"),
+    }
 
 
 def _upsert_batch(items: list[dict]) -> int:
@@ -254,8 +383,6 @@ def _upsert_batch(items: list[dict]) -> int:
     For very large batches, consider psycopg2.extras.execute_values for
     higher throughput instead of per-row execute calls.
     """
-    import json as _json
-
     count = 0
     with lakebase.get_connection() as conn:
         with conn.cursor() as cur:

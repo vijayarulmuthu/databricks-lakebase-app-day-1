@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <title>Massive Stock Watchlist</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%93%88</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #f4f6fb;
@@ -22,22 +26,53 @@
     * { box-sizing: border-box; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif;
-      max-width: 640px;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      max-width: 1080px;
       margin: 0 auto;
       padding: 56px 24px 80px;
       color: var(--text);
       background: var(--bg);
+      background-image: radial-gradient(circle at top left, #eef0fd 0%, var(--bg) 55%);
       line-height: 1.5;
     }
 
-    header { margin-bottom: 28px; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .title-row { display: flex; align-items: center; gap: 10px; }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      font-size: 20px;
+      background: var(--accent-soft);
+      border-radius: 10px;
+      flex-shrink: 0;
+    }
 
     h1 {
-      font-size: 26px;
+      font-size: 24px;
       font-weight: 700;
       letter-spacing: -0.01em;
-      margin: 0 0 8px;
+      margin: 0;
+    }
+
+    .badge-live {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-dark);
+      background: var(--accent-soft);
+      border-radius: 999px;
+      padding: 4px 10px;
+      white-space: nowrap;
     }
 
     .hint {
@@ -129,14 +164,22 @@
       overflow: hidden;
     }
 
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 
     th, td {
       text-align: left;
-      padding: 12px 16px;
+      padding: 14px 16px;
       border-bottom: 1px solid var(--border);
       font-size: 14px;
+      word-wrap: break-word;
     }
+
+    #watchlist-table th:nth-child(1), #watchlist-table td:nth-child(1) { width: 9%; }
+    #watchlist-table th:nth-child(2), #watchlist-table td:nth-child(2) { width: 27%; }
+    #watchlist-table th:nth-child(3), #watchlist-table td:nth-child(3) { width: 17%; }
+    #watchlist-table th:nth-child(4), #watchlist-table td:nth-child(4) { width: 15%; }
+    #watchlist-table th:nth-child(5), #watchlist-table td:nth-child(5) { width: 20%; }
+    #watchlist-table th:nth-child(6), #watchlist-table td:nth-child(6) { width: 12%; }
 
     thead th {
       font-size: 12px;
@@ -153,6 +196,10 @@
     td.price { font-weight: 600; color: var(--success); }
 
     td.actions { text-align: right; width: 1%; white-space: nowrap; }
+
+    .price-value { display: block; font-weight: 600; color: var(--success); }
+    td .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .sparkline { display: block; }
 
     .btn-delete {
       margin-top: 0;
@@ -175,13 +222,78 @@
       color: var(--muted);
       padding: 24px 16px;
     }
+
+    .card {
+      transition: box-shadow 0.2s ease, transform 0.2s ease;
+    }
+
+    .card:hover { box-shadow: 0 2px 4px rgba(16, 24, 40, 0.06), 0 12px 28px rgba(16, 24, 40, 0.08); }
+
+    tbody tr { transition: background 0.12s ease; }
+
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 20px;
+      margin-bottom: -8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .summary-bar strong { color: var(--text); font-weight: 600; }
+
+    #result.success { background: #ecfdf5; color: #047857; }
+    #result.error { background: #fef2f2; color: #b91c1c; }
+
+    .change-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: middle;
+    }
+
+    .change-badge.up { color: #047857; background: #ecfdf5; }
+    .change-badge.down { color: #b91c1c; background: #fef2f2; }
+
+    @keyframes shimmer {
+      0% { background-position: -120px 0; }
+      100% { background-position: 120px 0; }
+    }
+
+    .skeleton-cell {
+      display: block;
+      height: 12px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #eef0f5 25%, #f7f8fb 37%, #eef0f5 63%);
+      background-size: 240px 100%;
+      animation: shimmer 1.2s ease-in-out infinite;
+    }
+
+    @media (max-width: 900px) {
+      .table-wrap { overflow-x: auto; }
+      table { table-layout: auto; min-width: 720px; }
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 32px 16px 60px; }
+      .form-row { flex-direction: column; align-items: stretch; }
+      button { margin-top: 12px; width: 100%; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Stock Watchlist</h1>
-    <p class="hint">Enter a single ticker symbol. This sends exactly ONE call to the Massive API to fetch the latest price, then adds it to your watchlist.</p>
+    <div class="title-row">
+      <span class="logo" aria-hidden="true">&#128200;</span>
+      <h1>Stock Watchlist</h1>
+    </div>
+    <span class="badge-live">Live data</span>
   </header>
+  <p class="hint">Enter a single ticker symbol. This sends exactly ONE call to the Massive API to fetch the latest price, then adds it to your watchlist.</p>
 
   <form id="stock-form" class="card">
     <div class="form-row">
@@ -195,13 +307,16 @@
 
   <div id="result"></div>
 
+  <div id="summary-bar" class="summary-bar" hidden></div>
+
   <div class="table-wrap">
     <table id="watchlist-table">
       <thead>
         <tr>
           <th>Symbol</th>
-          <th>Email</th>
-          <th>Latest price</th>
+          <th>Company</th>
+          <th>Price</th>
+          <th>Trend</th>
           <th>Updated</th>
           <th></th>
         </tr>
@@ -215,20 +330,116 @@
     const resultEl = document.getElementById("result");
     const watchlistBody = document.getElementById("watchlist-body");
 
-    async function loadWatchlist() {
+    function formatVolume(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return "-";
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+      return String(n);
+    }
+
+    // Massive's ticker-details response shape isn't fixed here, so read a
+    // few plausible field names defensively (mirrors the backend's _pick).
+    function extractProfile(profile) {
+      if (!profile) return null;
+      const p = profile.results || profile;
+      if (!p || typeof p !== "object") return null;
+      const name = p.name || p.company_name || null;
+      const exchange = p.primary_exchange || p.exchange || null;
+      const sector = p.sic_description || p.sector || p.industry || null;
+      if (!name && !exchange && !sector) return null;
+      return { name, exchange, sector };
+    }
+
+    // Same defensiveness for the price-history response: accept either a
+    // Polygon-style {results: [...]} shape or a bare array of bars.
+    function extractCloses(priceHistory) {
+      if (!priceHistory) return [];
+      const results = Array.isArray(priceHistory.results)
+        ? priceHistory.results
+        : Array.isArray(priceHistory)
+        ? priceHistory
+        : [];
+      return results
+        .map((bar) => (bar.c ?? bar.close ?? bar.p ?? bar.price ?? null))
+        .filter((v) => v !== null && v !== undefined);
+    }
+
+    function sparklineSvg(closes) {
+      if (!closes || closes.length < 2) return "";
+      const w = 84, h = 28, pad = 3;
+      const min = Math.min(...closes);
+      const max = Math.max(...closes);
+      const range = max - min || 1;
+      const stepX = (w - pad * 2) / (closes.length - 1);
+      const points = closes
+        .map((v, i) => {
+          const x = pad + i * stepX;
+          const y = pad + (h - pad * 2) * (1 - (v - min) / range);
+          return x.toFixed(1) + "," + y.toFixed(1);
+        })
+        .join(" ");
+      const trendUp = closes[closes.length - 1] >= closes[0];
+      const stroke = trendUp ? "#059669" : "#dc2626";
+      return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="sparkline"><polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    }
+
+    function showSkeleton(rows = 3) {
+      watchlistBody.innerHTML = "";
+      for (let i = 0; i < rows; i++) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = Array.from({ length: 6 })
+          .map(() => `<td><span class="skeleton-cell" style="width:${40 + Math.random() * 40}px"></span></td>`)
+          .join("");
+        watchlistBody.appendChild(tr);
+      }
+    }
+
+    function updateSummaryBar(data) {
+      const bar = document.getElementById("summary-bar");
+      if (!data.length) {
+        bar.hidden = true;
+        bar.innerHTML = "";
+        return;
+      }
+      const withChange = data.filter((r) => r.latest_price != null && r.open_price != null && Number(r.open_price) !== 0);
+      const avgChangePct = withChange.length
+        ? withChange.reduce((sum, r) => sum + (Number(r.latest_price) - Number(r.open_price)) / Number(r.open_price), 0) / withChange.length * 100
+        : null;
+      const changeText = avgChangePct === null
+        ? "-"
+        : (avgChangePct >= 0 ? "+" : "") + avgChangePct.toFixed(2) + "%";
+      bar.hidden = false;
+      bar.innerHTML =
+        `<span><strong>${data.length}</strong> symbol${data.length === 1 ? "" : "s"} tracked</span>` +
+        `<span>Avg. day change: <strong>${changeText}</strong></span>`;
+    }
+
+    function changeBadgeHtml(row) {
+      if (row.latest_price == null || row.open_price == null || Number(row.open_price) === 0) return "";
+      const pct = ((Number(row.latest_price) - Number(row.open_price)) / Number(row.open_price)) * 100;
+      const dir = pct >= 0 ? "up" : "down";
+      const arrow = pct >= 0 ? "\u25b2" : "\u25bc";
+      return `<span class="change-badge ${dir}">${arrow} ${Math.abs(pct).toFixed(2)}%</span>`;
+    }
+
+    async function loadWatchlist({ showLoading = false } = {}) {
+      if (showLoading) showSkeleton();
       try {
         const resp = await fetch("/watchlist");
         const data = await resp.json();
         if (!resp.ok) {
-          resultEl.textContent = "Error loading watchlist: " + (data.error || resp.statusText);
+          setResult("Error loading watchlist: " + (data.error || resp.statusText), "error");
           return;
         }
         watchlistBody.innerHTML = "";
+        updateSummaryBar(data);
 
         if (!data.length) {
           const emptyTr = document.createElement("tr");
           emptyTr.className = "empty-row";
-          emptyTr.innerHTML = `<td colspan="5">Your watchlist is empty. Add a ticker above to get started.</td>`;
+          emptyTr.innerHTML = `<td colspan="6">Your watchlist is empty. Add a ticker above to get started.</td>`;
           watchlistBody.appendChild(emptyTr);
           return;
         }
@@ -239,19 +450,46 @@
             ? Number(row.latest_price).toFixed(2)
             : "-";
           const updated = row.updated_at ? new Date(row.updated_at).toLocaleString() : "-";
-          tr.innerHTML = `<td>${row.symbol}</td><td>${row.email || "-"}</td><td class="price">${price}</td><td>${updated}</td>` +
+
+          const ohlcParts = [];
+          if (row.open_price != null) ohlcParts.push("O " + Number(row.open_price).toFixed(2));
+          if (row.high_price != null) ohlcParts.push("H " + Number(row.high_price).toFixed(2));
+          if (row.low_price != null) ohlcParts.push("L " + Number(row.low_price).toFixed(2));
+          if (row.volume != null) ohlcParts.push("Vol " + formatVolume(row.volume));
+          const ohlcLine = ohlcParts.length ? `<div class="sub">${ohlcParts.join(" \u00b7 ")}</div>` : "";
+
+          const profile = extractProfile(row.profile);
+          const companyCell = profile
+            ? `<div>${profile.name || row.symbol}</div><div class="sub">${[profile.exchange, profile.sector].filter(Boolean).join(" \u00b7 ") || "-"}</div>`
+            : `<div class="sub">-</div>`;
+
+          const closes = extractCloses(row.price_history);
+          const spark = sparklineSvg(closes) || `<span class="sub">-</span>`;
+
+          tr.innerHTML =
+            `<td><strong>${row.symbol}</strong></td>` +
+            `<td>${companyCell}</td>` +
+            `<td class="price"><span class="price-value">${price}${changeBadgeHtml(row)}</span>${ohlcLine}</td>` +
+            `<td>${spark}</td>` +
+            `<td>${updated}</td>` +
             `<td class="actions"><button type="button" class="btn-delete" data-symbol="${row.symbol}">Remove</button></td>`;
           watchlistBody.appendChild(tr);
         });
       } catch (err) {
-        resultEl.textContent = "Failed to load watchlist: " + err;
+        setResult("Failed to load watchlist: " + err, "error");
       }
+    }
+
+    function setResult(message, variant) {
+      resultEl.textContent = message;
+      resultEl.classList.remove("success", "error");
+      if (variant) resultEl.classList.add(variant);
     }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const symbol = document.getElementById("symbol").value;
-      resultEl.textContent = "Adding to watchlist...";
+      setResult("Adding to watchlist...");
 
       try {
         const resp = await fetch("/watchlist", {
@@ -261,21 +499,21 @@
         });
         const data = await resp.json();
         if (!resp.ok) {
-          resultEl.textContent = "Error: " + (data.error || resp.statusText);
+          setResult("Error: " + (data.error || resp.statusText), "error");
           return;
         }
-        resultEl.textContent = "Added " + data.symbol + " at price " + data.latest_price;
+        setResult("Added " + data.symbol + " at price " + data.latest_price, "success");
         document.getElementById("symbol").value = "";
         loadWatchlist();
       } catch (err) {
-        resultEl.textContent = "Request failed: " + err;
+        setResult("Request failed: " + err, "error");
       }
     });
 
     async function deleteSymbol(symbol, button) {
       button.disabled = true;
       button.textContent = "Removing...";
-      resultEl.textContent = "";
+      setResult("");
 
       try {
         const resp = await fetch(`/watchlist/${encodeURIComponent(symbol)}`, {
@@ -283,14 +521,15 @@
         });
         const data = await resp.json();
         if (!resp.ok) {
-          resultEl.textContent = "Error: " + (data.error || resp.statusText);
+          setResult("Error: " + (data.error || resp.statusText), "error");
           button.disabled = false;
           button.textContent = "Remove";
           return;
         }
+        setResult("Removed " + symbol + " from your watchlist", "success");
         loadWatchlist();
       } catch (err) {
-        resultEl.textContent = "Failed to remove " + symbol + ": " + err;
+        setResult("Failed to remove " + symbol + ": " + err, "error");
         button.disabled = false;
         button.textContent = "Remove";
       }
@@ -303,7 +542,7 @@
       deleteSymbol(symbol, button);
     });
 
-    loadWatchlist();
+    loadWatchlist({ showLoading: true });
   </script>
 </body>
 </html>

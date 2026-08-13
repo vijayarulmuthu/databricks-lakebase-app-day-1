@@ -8,6 +8,7 @@ files, or app.yaml.
 
 import base64
 import os
+from datetime import date, timedelta
 from typing import Any
 
 import requests
@@ -85,3 +86,25 @@ class MassiveClient:
         """
         data = self.get(f"/v2/aggs/ticker/{symbol}/prev")
         return data
+
+    def get_ticker_details(self, symbol: str) -> dict:
+        """
+        Fetch company/reference profile data (name, exchange, sector,
+        market cap, etc.) for a single symbol in ONE API call. Intended to
+        be called sparingly and cached by the caller - this data changes
+        rarely, unlike price.
+        """
+        return self.get(f"/v3/reference/tickers/{symbol}")
+
+    def get_price_history(self, symbol: str, days: int = 30) -> dict:
+        """
+        Fetch a short daily OHLC history for a single symbol in ONE API call,
+        used to render a price trend/sparkline. Like get_ticker_details, this
+        is meant to be cached by the caller rather than re-fetched on every
+        page load.
+        """
+        end = date.today()
+        start = end - timedelta(days=days)
+        return self.get(
+            f"/v2/aggs/ticker/{symbol}/range/1/day/{start.isoformat()}/{end.isoformat()}"
+        )
