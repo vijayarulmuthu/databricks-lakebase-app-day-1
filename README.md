@@ -1,16 +1,18 @@
-# Massive + Lakebase Databricks App Boilerplate
+# Massive + Lakebase Databricks App
 
-A minimal Databricks App that:
+A Databricks App that:
 - Connects to **Lakebase** (Databricks-managed Postgres) using a single `LAKEBASE_URL` secret (a native Postgres role with a static password)
-- Calls the **Massive API** (large paginated dataset) using a key stored in a Databricks secret scope
+- Calls the **Massive API** (financial market data) using a key stored in a Databricks secret scope
 - Syncs Massive API data into Lakebase in batches
-- Exposes a small Flask API to trigger syncs and read synced records
+- Serves a stock **watchlist web UI**: add/remove tickers, view live OHLCV prices, a cached company profile + 30-day sparkline, and on-demand news headlines, all personalized per logged-in user
+- Caches per-symbol data (company profile, price history, news) in Lakebase and shares it across users to minimize Massive API calls
 
 ## Files
 
-- `app.py` - Flask app: `/healthz`, `/records` (GET), `/sync` (POST)
+- `app.py` - Flask app serving both the generic sync API and the watchlist UI/API (see [Endpoints](#endpoints))
 - `lakebase.py` - Lakebase connection helper (single `LAKEBASE_URL`, psycopg2 + SQLAlchemy)
-- `massive_client.py` - Massive API client with pagination generator for large datasets
+- `massive_client.py` - Massive API client: paginated bulk sync plus single-call helpers for price, ticker details, price history, and news
+- `templates/index.html` - Single-page watchlist UI (vanilla JS, no build step) - add/remove tickers, sparklines, price-change badges, and an expandable news panel per row
 - `setup_secrets.py` - One-time script to create the secret scopes and store the Massive API key + Lakebase URL
 - `app.yaml` - Databricks App deployment config (command + env vars)
 - `.env.example` - Local dev env var template (copy to `.env`, do not commit real values)
@@ -117,8 +119,19 @@ All of this is done through the Databricks workspace UI:
 - `GET /healthz` - health check
 - `GET /records?limit=100` - read synced records from Lakebase
 - `POST /sync?batch_size=500` with optional JSON body `{"path": "/records"}` - pull from Massive API and upsert into Lakebase
-- `GET /watchlist` - get the current user's watchlist symbols with last known price
-- `POST /watchlist` - add/update a symbol on the current user's watchlist
+- `GET /watchlist` - get the current user's watchlist with full OHLCV, plus each symbol's cached company profile and 30-day price history
+- `POST /watchlist` with JSON/form body `{"symbol": "AAPL"}` - fetch the latest OHLCV bar for a symbol (one Massive API call), refresh its cached profile/price history if stale, and add/update it on the current user's watchlist
+- `DELETE /watchlist/<symbol>` - remove a symbol from the current user's watchlist
+- `GET /watchlist/<symbol>/news` - fetch (and cache) recent news headlines for a symbol already on the current user's watchlist
+
+The current user is resolved from the `X-Forwarded-Email` header that Databricks Apps injects for the logged-in user, falling back to the Databricks SDK's current-user API for local development.
+
+### Per-symbol caching
+
+Two tables cache Massive API responses **per symbol** (not per user), so adding the same symbol from multiple users' watchlists doesn't multiply API calls:
+
+- `ticker_details` - company profile + 30-day price history, refreshed at most every `TICKER_DETAILS_MAX_AGE_HOURS` (default 24h)
+- `ticker_news` - news headlines, refreshed at most every `TICKER_NEWS_MAX_AGE_HOURS` (default 6h), fetched only when a user opens the "News" panel for a symbol
 
 ## Enabling Change Data Feed (CDF) for Postgres tables
 
@@ -131,12 +144,14 @@ one row.
 ### 1. Set `REPLICA IDENTITY FULL` on the tables you want to track
 
 By default, Postgres only logs primary-key columns on change. To capture full row contents (needed for
-CDF), enable `REPLICA IDENTITY FULL` on each table — including `watchlist` and `massive_records` from
-this app:
+CDF), enable `REPLICA IDENTITY FULL` on each table — including `watchlist`, `massive_records`,
+`ticker_details`, and `ticker_news` from this app:
 
 ```sql
 ALTER TABLE watchlist REPLICA IDENTITY FULL;
 ALTER TABLE massive_records REPLICA IDENTITY FULL;
+ALTER TABLE ticker_details REPLICA IDENTITY FULL;
+ALTER TABLE ticker_news REPLICA IDENTITY FULL;
 ```
 
 Run this once per table, either from a Databricks SQL editor connected to your Lakebase instance, or
